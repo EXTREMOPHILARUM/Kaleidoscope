@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive p5.js Kaleidoscope</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.dom.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        main {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+        }
+        .controls-wrapper {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            gap: 15px;
+            padding: 10px;
+            background-color: #2c2c2c;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        canvas {
+            display: block;
+            border: 2px solid #333;
+            border-radius: 12px;
+            box-shadow: 0 6px 12px rgba(0,0,0,0.3);
+            cursor: crosshair;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            transition: background-color 0.3s, opacity 0.3s;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        select {
+             padding: 8px 12px;
+             font-size: 16px;
+             background-color: #444;
+             color: white;
+             border: 1px solid #666;
+             border-radius: 5px;
+        }
+        .record-btn.recording, .replay-btn.replaying {
+             background-color: #dc3545;
+        }
+        .record-btn.recording:hover, .replay-btn.replaying:hover {
+             background-color: #c82333;
+        }
+        label, span {
+            font-size: 16px;
+        }
+        footer {
+            position: fixed;
+            bottom: 10px;
+            right: 15px;
+            font-size: 12px;
+        }
+        footer a {
+            color: rgba(255, 255, 255, 0.5);
+            text-decoration: none;
+            transition: color 0.3s;
+        }
+        footer a:hover {
+            color: rgba(255, 255, 255, 0.9);
+        }
+    </style>
+</head>
+<body>
+    <main id="main">
+        <!-- The p5.js canvas will be created here -->
+    </main>
+    <footer>
+        <a href="http://saurabhn.com" target="_blank" rel="noopener noreferrer">Created by saurabhn.com</a>
+    </footer>
+    <script>
+        // UI Elements
+        let symmetrySlider, formulaSelect;
+        let clearButton, recordButton, replayButton, drawFormulaButton;
+
+        // Drawing & Animation State
+        let canvasRotation = 0;
+        let kaleidoscopeLayer;
+        const bufferSize = 900;
+        let timeSalt; 
+
+        // Record & Replay State
+        let isRecording = false;
+        let isReplaying = false;
+        let recording = [];
+        let replayIndex = 0;
+        let isReplayingForward = true;
+
+        // Formula Animation State
+        let isAnimatingFormula = false;
+        let formulaPoints = [];
+        let formulaAnimationIndex = 0;
+        const FORMULA_ANIMATION_SPEED = 10; // Increase this value to make the animation faster
+
+        function setup() {
+            // --- Canvas & Graphics Buffer Setup ---
+            const canvas = createCanvas(600, 600);
+            canvas.parent('main');
+            kaleidoscopeLayer = createGraphics(bufferSize, bufferSize);
+            angleMode(DEGREES);
+            kaleidoscopeLayer.angleMode(DEGREES);
+            kaleidoscopeLayer.colorMode(HSB, 360, 100, 100, 1);
+            timeSalt = millis();
+            
+            // --- UI Controls ---
+            const controlsWrapper = createDiv().class('controls-wrapper').parent('main');
+            const controlsDivTop = createDiv().class('controls').parent(controlsWrapper);
+            createSpan('Symmetry: ').parent(controlsDivTop);
+            symmetrySlider = createSlider(2, 24, 6, 2).parent(controlsDivTop);
+            clearButton = createButton('Clear').parent(controlsDivTop);
+            clearButton.mousePressed(clearCanvas);
+
+            const controlsDivBottom = createDiv().class('controls').parent(controlsWrapper);
+            recordButton = createButton('Record').class('record-btn').parent(controlsDivBottom);
+            recordButton.mousePressed(toggleRecording);
+            replayButton = createButton('Replay').class('replay-btn').parent(controlsDivBottom);
+            replayButton.mousePressed(toggleReplay);
+            
+            const formulaControlsDiv = createDiv().class('controls').parent(controlsWrapper);
+            createSpan('Formula: ').parent(formulaControlsDiv);
+            formulaSelect = createSelect().parent(formulaControlsDiv);
+            formulaSelect.option('Freehand Drawing');
+            formulaSelect.option('Lissajous Curve');
+            formulaSelect.option('Maurer Rose');
+            formulaSelect.option('Spirograph');
+            formulaSelect.option('Supershape');
+            formulaSelect.option('Butterfly Curve');
+            formulaSelect.changed(updateUI);
+            drawFormulaButton = createButton('Draw Formula').parent(formulaControlsDiv);
+            drawFormulaButton.mousePressed(startFormulaAnimation);
+            
+            updateUI();
+        }
+        
+        // --- Core Functions ---
+
+        function draw() {
+            background(15); 
+
+            if (isReplaying) {
+                runReplay();
+            } else if (isAnimatingFormula) {
+                runFormulaAnimation();
+            } else if (formulaSelect.value() === 'Freehand Drawing') {
+                runLiveDrawing();
+            }
+
+            // --- Display and Rotate the final image ---
+            translate(width / 2, height / 2);
+            rotate(canvasRotation);
+            canvasRotation += 0.1;
+            image(kaleidoscopeLayer, -bufferSize / 2, -bufferSize / 2);
+        }
+        
+        // --- Event Handlers & State Management ---
+
+        function runLiveDrawing() {
+             if (mouseIsPressed && mouseX > 0 && mouseX < width && mouseY > 0 && mouseY < height) {
+                const drawData = {
+                    mx: mouseX - width / 2,
+                    my: mouseY - height / 2,
+                    pmx: pmouseX - width / 2,
+                    pmy: pmouseY - height / 2,
+                    hue: (frameCount + timeSalt) % 360, 
+                    weight: 4
+                };
+                drawKaleidoscopeLines(drawData);
+
+                if (isRecording) {
+                    recording.push(drawData);
+                }
+            }
+        }
+        
+        // --- Formula Drawing ---
+
+        function startFormulaAnimation() {
+            const formulaName = formulaSelect.value();
+            if (formulaName === 'Freehand Drawing') return;
+
+            isAnimatingFormula = true;
+            formulaAnimationIndex = 0;
+            formulaPoints = generateFormulaPoints(formulaName);
+
+            // If we're recording, add the entire generated formula to the recording array.
+            if (isRecording) {
+                recording = recording.concat(formulaPoints);
+            }
+
+            updateUI();
+        }
+
+        function runFormulaAnimation() {
+            // Draw multiple points per frame for faster animation
+            for (let i = 0; i < FORMULA_ANIMATION_SPEED && formulaAnimationIndex < formulaPoints.length; i++) {
+                drawKaleidoscopeLines(formulaPoints[formulaAnimationIndex]);
+                formulaAnimationIndex++;
+            }
+
+            // Check if the animation is finished after the loop
+            if (formulaAnimationIndex >= formulaPoints.length) {
+                isAnimatingFormula = false;
+                updateUI();
+            }
+        }
+
+        function generateFormulaPoints(formulaName) {
+            const points = [];
+            const hueOffset = random(360); // A random starting point for the color cycle
+            let px, py;
+
+            if (formulaName === 'Lissajous Curve') {
+                const scale = 250;
+                const a = floor(random(1, 8));
+                const b = floor(random(1, 8));
+                for (let t = 0; t <= 360; t += 0.5) {
+                    let x = sin(a * t) * scale;
+                    let y = cos(b * t) * scale;
+                    if (t > 0) points.push({ mx: x, my: y, pmx: px, pmy: py, hue: (t * 2 + hueOffset) % 360, weight: 2 });
+                    px = x; py = y;
+                }
+            } else if (formulaName === 'Maurer Rose') {
+                const n = floor(random(2, 8));
+                const d = floor(random(2, 20));
+                const scale = 250;
+                for (let i = 0; i < 361; i++) {
+                    let k = i * d;
+                    let r = scale * sin(n * k);
+                    let x = r * cos(k);
+                    let y = r * sin(k);
+                    if (i > 0) points.push({ mx: x, my: y, pmx: px, pmy: py, hue: (i + hueOffset) % 360, weight: 2 });
+                    px = x; py = y;
+                }
+            } else if (formulaName === 'Spirograph') {
+                const R = 150;
+                const r = floor(random(40, 80));
+                const d = floor(random(50, 150));
+                for (let t = 0; t < 360 * 5; t += 0.5) {
+                    let x = (R - r) * cos(t) + d * cos(((R - r) / r) * t);
+                    let y = (R - r) * sin(t) - d * sin(((R - r) / r) * t);
+                    if (t > 0) points.push({ mx: x, my: y, pmx: px, pmy: py, hue: (t + hueOffset) % 360, weight: 2 });
+                    px = x; py = y;
+                }
+            } else if (formulaName === 'Supershape') {
+                const scale = 200;
+                const m = floor(random(3, 12));
+                const n1 = random(0.5, 1.7);
+                const n2 = random(0.5, 1.7);
+                const n3 = random(0.5, 1.7);
+                const a = 1, b = 1;
+                for (let angle = 0; angle < 360; angle += 0.2) {
+                    let r = pow(abs(cos(m * angle / 4) / a), n2) + pow(abs(sin(m * angle / 4) / b), n3);
+                    r = pow(r, -1 / n1);
+                    r *= scale;
+                    let x = r * cos(angle);
+                    let y = r * sin(angle);
+                    if (angle > 0) points.push({ mx: x, my: y, pmx: px, pmy: py, hue: (angle + hueOffset) % 360, weight: 2 });
+                    px = x; py = y;
+                }
+            } else if (formulaName === 'Butterfly Curve') {
+                 const scale = 35;
+                 for (let t = 0; t < 360 * 4; t+= 0.2) {
+                     let r = exp(sin(t)) - 2 * cos(4 * t) + pow(sin((2 * t - PI) / 24), 5);
+                     let x = r * cos(t) * scale;
+                     let y = r * sin(t) * scale * -1; // Invert y-axis
+                     if (t > 0) points.push({ mx: x, my: y, pmx: px, pmy: py, hue: (t / 4 + hueOffset) % 360, weight: 2 });
+                     px = x; py = y;
+                 }
+            }
+            return points;
+        }
+
+        function drawKaleidoscopeLines({ mx, my, pmx, pmy, hue, weight }) {
+            const symmetry = symmetrySlider.value();
+            const angle = 360 / symmetry;
+
+            kaleidoscopeLayer.push();
+            kaleidoscopeLayer.translate(kaleidoscopeLayer.width / 2, kaleidoscopeLayer.height / 2);
+            kaleidoscopeLayer.stroke(hue, 80, 100, 0.6);
+            kaleidoscopeLayer.strokeWeight(weight);
+            for (let i = 0; i < symmetry; i++) {
+                kaleidoscopeLayer.rotate(angle);
+                kaleidoscopeLayer.line(mx, my, pmx, pmy);
+                kaleidoscopeLayer.push();
+                kaleidoscopeLayer.scale(1, -1);
+                kaleidoscopeLayer.line(mx, my, pmx, pmy);
+                kaleidoscopeLayer.pop();
+            }
+            kaleidoscopeLayer.pop();
+        }
+        
+        // --- Replay Logic ---
+
+        function runReplay() {
+             if (recording.length === 0) { isReplaying = false; updateUI(); return; }
+            if (isReplayingForward) {
+                if (replayIndex < recording.length) { drawKaleidoscopeLines(recording[replayIndex]); replayIndex++; } 
+                else { isReplayingForward = false; replayIndex--; }
+            } else { 
+                if (replayIndex >= 0) {
+                    clearCanvas(true);
+                    for (let i = 0; i <= replayIndex; i++) drawKaleidoscopeLines(recording[i]);
+                    replayIndex--;
+                } else { isReplayingForward = true; replayIndex = 0; clearCanvas(true); }
+            }
+        }
+        
+        // --- UI State Management ---
+
+        function toggleRecording() {
+            isRecording = !isRecording;
+            if (isRecording) {
+                recording = [];
+                clearCanvas(true);
+            };
+            updateUI();
+        }
+
+
+        function toggleReplay() {
+            if (isReplaying) {
+                isReplaying = false;
+            } else if (recording.length > 0) {
+                 isReplaying = true;
+                 replayIndex = 0; 
+                 isReplayingForward = true; 
+                 clearCanvas(true);
+            }
+            updateUI();
+        }
+
+
+        function clearCanvas(isInternal = false) { 
+            kaleidoscopeLayer.clear();
+            if (!isRecording && !isReplaying && !isAnimatingFormula && !isInternal) {
+                recording = [];
+                updateUI();
+            }
+        }
+        
+        function updateUI() {
+            const isFormulaMode = formulaSelect.value() !== 'Freehand Drawing';
+            
+            // Handle button text and classes based on state
+            recordButton.html(isRecording ? 'Stop' : 'Record').class(isRecording ? 'record-btn recording' : 'record-btn');
+            replayButton.html(isReplaying ? 'Stop Replay' : 'Replay').class(isReplaying ? 'replay-btn replaying' : 'replay-btn');
+            drawFormulaButton.html(isAnimatingFormula ? 'Drawing...' : 'Draw Formula');
+            
+            // --- Set Disabled States based on a clear, state-by-state logic ---
+
+            if (isAnimatingFormula) {
+                // If a formula is animating, disable everything.
+                recordButton.attribute('disabled', '');
+                replayButton.attribute('disabled', '');
+                clearButton.attribute('disabled', '');
+                symmetrySlider.attribute('disabled', '');
+                formulaSelect.attribute('disabled', '');
+                drawFormulaButton.attribute('disabled', '');
+            } else if (isRecording) {
+                // If recording, only the 'Stop' button should be active.
+                recordButton.removeAttribute('disabled');
+                replayButton.attribute('disabled', '');
+                clearButton.attribute('disabled', '');
+                symmetrySlider.attribute('disabled', '');
+                formulaSelect.attribute('disabled', '');
+                drawFormulaButton.attribute('disabled', '');
+            } else if (isReplaying) {
+                // If replaying, only the 'Stop Replay' button should be active.
+                replayButton.removeAttribute('disabled');
+                recordButton.attribute('disabled', '');
+                clearButton.attribute('disabled', '');
+                symmetrySlider.attribute('disabled', '');
+                formulaSelect.attribute('disabled', '');
+                drawFormulaButton.attribute('disabled', '');
+            } else {
+                // Idle state: enable controls based on context.
+                clearButton.removeAttribute('disabled');
+                symmetrySlider.removeAttribute('disabled');
+                formulaSelect.removeAttribute('disabled');
+
+                if (isFormulaMode) {
+                    drawFormulaButton.removeAttribute('disabled');
+                    recordButton.attribute('disabled', '');
+                    replayButton.attribute('disabled', '');
+                } else {
+                    drawFormulaButton.attribute('disabled', '');
+                    recordButton.removeAttribute('disabled');
+                    if (recording.length > 0) {
+                        replayButton.removeAttribute('disabled');
+                    } else {
+                        replayButton.attribute('disabled', '');
+                    }
+                }
+            }
+        }
+    </script>
+</body>
+</html>
